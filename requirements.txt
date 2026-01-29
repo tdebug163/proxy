@@ -1,5 +1,5 @@
 flask
-aiohttp
 cryptography
 pyyaml
-mtprotoproxy-py
+aiohttp
+MTPyProxy
