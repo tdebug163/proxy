@@ -1,25 +1,29 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
-    // تم حذف "time" من هنا لأنه كان سبب المشكلة
+	"strings"
 )
 
-// السيكرت الثابت
-const MySecret = "eeb83bb28ac66051d62d32557cde65e2"
-
-// رابط المحرك
+// متغير عالمي لحفظ السيكرت وعرضه في صفحة الويب
+var LiveSecret = "Initializing... Please wait."
 const MtgURL = "https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-2.1.7-linux-amd64.tar.gz"
 
 func main() {
-	// 1. تشغيل الويب سيرفر
+	// 1. تشغيل الويب سيرفر (لعرض السيكرت لك)
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Go Proxy is Running 🔥")
+			// تنسيق الصفحة لتكون واضحة
+			fmt.Fprintf(w, "=== MTG Proxy Auto-Generated ===\n\n")
+			fmt.Fprintf(w, "STATUS: Running 🔥\n")
+			fmt.Fprintf(w, "PORT: 443\n")
+			fmt.Fprintf(w, "SECRET: %s\n\n", LiveSecret)
+			fmt.Fprintf(w, "Make sure to copy the secret above!")
 		})
 		
 		port := os.Getenv("PORT")
@@ -30,17 +34,17 @@ func main() {
 		http.ListenAndServe(":"+port, nil)
 	}()
 
-	// 2. تشغيل البروكسي
-	if err := runProxy(); err != nil {
+	// 2. البدء في عملية التجهيز
+	if err := startSystem(); err != nil {
 		fmt.Printf("[!] Fatal Error: %v\n", err)
-		// نمنع البرنامج من الإغلاق لكي يبقى الويب شغالاً
 		select {}
 	}
 }
 
-func runProxy() error {
+func startSystem() error {
 	fmt.Println("[-] Downloading MTG Engine...")
-
+	
+	// تحميل
 	resp, err := http.Get(MtgURL)
 	if err != nil {
 		return err
@@ -54,16 +58,47 @@ func runProxy() error {
 	defer out.Close()
 	io.Copy(out, resp.Body)
 
+	// فك ضغط
 	fmt.Println("[-] Extracting...")
 	exec.Command("tar", "-xvf", "mtg.tar.gz").Run()
 
 	binaryPath := "./mtg-2.1.7-linux-amd64/mtg"
 	os.Chmod(binaryPath, 0777)
 
-	fmt.Println("[-] Engine Ready. Starting Proxy on Port 443...")
+	// --- الخطوة الحاسمة: توليد السيكرت ---
+	fmt.Println("[-] Asking Engine to Generate Secret (FakeTLS - google.com)...")
+	
+	// نطلب من المحرك توليد سيكرت خاص بـ google.com عشان التمويه
+	genCmd := exec.Command(binaryPath, "generate-secret", "--hex", "google.com")
+	var outBuf bytes.Buffer
+	genCmd.Stdout = &outBuf
+	
+	if err := genCmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate secret: %v", err)
+	}
 
-	// تشغيل البروكسي
-	cmd := exec.Command(binaryPath, "simple-run", "-b", "0.0.0.0:443", MySecret)
+	// تنظيف السيكرت الناتج
+	LiveSecret = strings.TrimSpace(outBuf.String())
+	fmt.Printf("[-] Secret Generated Successfully: %s\n", LiveSecret)
+
+	// --- كتابة ملف الإعدادات بالسيكرت الجديد ---
+	fmt.Println("[-] Creating Config File...")
+	configContent := fmt.Sprintf(`
+bind-to = "0.0.0.0:443"
+
+[users]
+name = "auto_user"
+secret = "%s"
+`, LiveSecret)
+
+	if err := os.WriteFile("mtg.toml", []byte(configContent), 0644); err != nil {
+		return err
+	}
+
+	fmt.Println("[-] Engine Ready. Starting Proxy...")
+
+	// تشغيل المحرك بملف الإعدادات
+	cmd := exec.Command(binaryPath, "run", "mtg.toml")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
