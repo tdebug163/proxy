@@ -2,4 +2,4 @@ flask
 aiohttp
 cryptography
 pyyaml
-mtprotoproxy
+mtprotoproxy-py
