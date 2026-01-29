@@ -8,19 +8,28 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-var LiveSecret = "Initializing..."
+// اسم ملف حفظ السيكرت
+const SecretFile = "my_secret.txt"
 const MtgURL = "https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-2.1.7-linux-amd64.tar.gz"
 
+// متغير عالمي للسيكرت
+var CurrentSecret = ""
+
 func main() {
-	// تشغيل الويب
+	// 1. تشغيل ويب سيرفر (يعرض السيكرت المحفوظ)
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "=== MTG Proxy (Go Edition) ===\n\n")
-			fmt.Fprintf(w, "STATUS: Running 🔥\n")
-			fmt.Fprintf(w, "SECRET: %s\n\n", LiveSecret)
-			fmt.Fprintf(w, "Copy the secret above to Telegram.")
+			fmt.Fprintf(w, "=== MTG Proxy Persistent ===\n\n")
+			if CurrentSecret != "" {
+				fmt.Fprintf(w, "STATUS: Running ✅\n")
+				fmt.Fprintf(w, "SECRET: %s\n\n", CurrentSecret)
+				fmt.Fprintf(w, "(This secret is saved and will be reused on restart)")
+			} else {
+				fmt.Fprintf(w, "STATUS: Initializing...\n")
+			}
 		})
 		
 		port := os.Getenv("PORT")
@@ -31,71 +40,70 @@ func main() {
 		http.ListenAndServe(":"+port, nil)
 	}()
 
-	if err := startSystem(); err != nil {
+	// 2. تشغيل النظام
+	if err := runSystem(); err != nil {
 		fmt.Printf("[!] Fatal Error: %v\n", err)
+		// إبقاء البرنامج يعمل لكي نرى الخطأ في الويب لو احتجنا
 		select {}
 	}
 }
 
-func startSystem() error {
-	fmt.Println("[-] Downloading MTG Engine...")
-	
-	resp, err := http.Get(MtgURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	out, err := os.Create("mtg.tar.gz")
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	io.Copy(out, resp.Body)
-
-	fmt.Println("[-] Extracting...")
-	exec.Command("tar", "-xvf", "mtg.tar.gz").Run()
-
+func runSystem() error {
+	// --- الخطوة 1: تجهيز المحرك ---
 	binaryPath := "./mtg-2.1.7-linux-amd64/mtg"
+	
+	// التحقق مما إذا كان المحرك موجوداً (لتجنب التحميل المتكرر)
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		fmt.Println("[-] Downloading MTG Engine...")
+		resp, err := http.Get(MtgURL)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		out, err := os.Create("mtg.tar.gz")
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		io.Copy(out, resp.Body)
+
+		fmt.Println("[-] Extracting...")
+		exec.Command("tar", "-xvf", "mtg.tar.gz").Run()
+	} else {
+		fmt.Println("[-] Engine already exists. Skipping download.")
+	}
+
 	os.Chmod(binaryPath, 0777)
 
-	// توليد السيكرت
-	fmt.Println("[-] Generating Secret...")
-	genCmd := exec.Command(binaryPath, "generate-secret", "--hex", "google.com")
-	var outBuf bytes.Buffer
-	genCmd.Stdout = &outBuf
-	
-	if err := genCmd.Run(); err != nil {
-		return fmt.Errorf("failed to generate secret: %v", err)
+	// --- الخطوة 2: إدارة السيكرت (الحفظ والاسترجاع) ---
+	// هل الملف موجود؟
+	if content, err := os.ReadFile(SecretFile); err == nil && len(content) > 0 {
+		fmt.Println("[-] Found saved secret!")
+		CurrentSecret = strings.TrimSpace(string(content))
+	} else {
+		fmt.Println("[-] No saved secret found. Generating new one...")
+		genCmd := exec.Command(binaryPath, "generate-secret", "--hex", "google.com")
+		var outBuf bytes.Buffer
+		genCmd.Stdout = &outBuf
+		if err := genCmd.Run(); err != nil {
+			return fmt.Errorf("generation failed: %v", err)
+		}
+		CurrentSecret = strings.TrimSpace(outBuf.String())
+		
+		// حفظ السيكرت للمستقبل
+		os.WriteFile(SecretFile, []byte(CurrentSecret), 0644)
+		fmt.Println("[-] New secret generated and saved to 'my_secret.txt'")
 	}
 
-	LiveSecret = strings.TrimSpace(outBuf.String())
-	fmt.Printf("[-] Secret Generated: %s\n", LiveSecret)
+	fmt.Printf("[-] Using Secret: %s\n", CurrentSecret)
+	fmt.Println("[-] Starting Proxy via Direct Command (No Config File)...")
 
-	// --- التصحيح الجذري هنا ---
-	// استخدام [users.name] بدلاً من [[users]]
-	// هذا التنسيق هو الوحيد الذي يقبله الإصدار 2.1.7
-	fmt.Println("[-] Creating Config File (Fixed Format)...")
+	// --- الخطوة 3: التشغيل المباشر ---
+	// نستخدم simple-run لأنه لا يحتاج ملف إعدادات (وهذا يحل مشكلة الخطأ السابق)
+	// Go يمرر السيكرت بشكل آمن جداً
+	cmd := exec.Command(binaryPath, "simple-run", "-b", "0.0.0.0:443", CurrentSecret)
 	
-	configContent := fmt.Sprintf(`
-bind-to = "0.0.0.0:443"
-
-[users.auto_user]
-secret = "%s"
-`, LiveSecret)
-
-	// كتابة الملف
-	if err := os.WriteFile("mtg.toml", []byte(configContent), 0644); err != nil {
-		return err
-	}
-
-	// طباعة محتوى الملف للتاكد في اللوج
-	fmt.Println("[-] Config Content Preview:")
-	fmt.Println(configContent)
-
-	fmt.Println("[-] Engine Ready. Starting Proxy...")
-
-	cmd := exec.Command(binaryPath, "run", "mtg.toml")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
