@@ -1,4 +1,3 @@
-cryptography
+mtprotoproxy
 aiohttp
 flask
-pyyaml
