@@ -1,19 +1,26 @@
 import os
 import asyncio
-from mtprotoproxy import MTProtoProxy
+from MTPyProxy.proxy import MTProtoProxy
 
-# جلب السيكرت من ريندر
+# جلب السيكرت من ريندر (الذي يبدأ بـ ee)
 SECRET = os.getenv("MY_SECRET")
 
-async def start_proxy():
-    # هنا "user" هو اسم مستعار، والمهم هو السيكرت
-    # المنفذ 443
-    proxy = MTProtoProxy(users={"user": SECRET}, port=443)
-    print("Starting Proxy on port 443...")
+async def run_proxy():
+    # المنفذ 443 هو المنفذ القياسي للبروكسي
+    # المكتبة ستتعامل مع السيكرت (ee) وتفعل التشفير تلقائياً
+    config = {
+        "port": 443,
+        "users": {"user1": SECRET},
+        "display_stats": True
+    }
+    
+    proxy = MTProtoProxy(config)
+    print("[-] MTProto Proxy is starting...")
+    print(f"[-] Global State: Active (USA Server)")
     await proxy.run()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(start_proxy())
+        asyncio.run(run_proxy())
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"[!] Error: {e}")
